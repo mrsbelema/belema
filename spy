@@ -1,0 +1,39 @@
+pip install pyspark
+from pyspark.sql import SparkSession
+from pyspark.ml.feature import VectorAssembler, StringIndexer, StandardScaler
+from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql.functions import col
+spark = SparkSession.builder \
+    .appName("HousePricePrediction") \
+    .getOrCreate()
+data = spark.read.csv("house_prices.csv", header=True, inferSchema=True)
+data.show(5)
+columns_to_use = ["LotArea", "YearBuilt", "OverallQual", "GrLivArea", "GarageCars", "TotalBsmtSF", "SalePrice"]
+data = data.select([col for col in columns_to_use]).na.drop()
+indexer = StringIndexer(inputCol="OverallQual", outputCol="OverallQualIndex")
+data = indexer.fit(data).transform(data)
+data = data.drop("OverallQual")  # Drop original column after indexing
+assembler = VectorAssembler(inputCols=["LotArea", "YearBuilt", "GrLivArea", "GarageCars", "TotalBsmtSF", "OverallQualIndex"],
+                            outputCol="features")
+data = assembler.transform(data)
+data = data.select("features", "SalePrice")
+train_data, test_data = data.randomSplit([0.8, 0.2], seed=42)
+scaler = StandardScaler(inputCol="features", outputCol="scaledFeatures")
+scaler_model = scaler.fit(train_data)
+train_data = scaler_model.transform(train_data).select("scaledFeatures", "SalePrice").withColumnRenamed("scaledFeatures", "features")
+test_data = scaler_model.transform(test_data).select("scaledFeatures", "SalePrice").withColumnRenamed("scaledFeatures", "features")
+lr = LinearRegression(featuresCol="features", labelCol="SalePrice")
+lr_model = lr.fit(train_data)
+# Make predictions on test data
+predictions = lr_model.transform(test_data)
+
+# Evaluate model with RMSE and MAE
+evaluator_rmse = RegressionEvaluator(labelCol="SalePrice", predictionCol="prediction", metricName="rmse")
+evaluator_mae = RegressionEvaluator(labelCol="SalePrice", predictionCol="prediction", metricName="mae")
+
+rmse = evaluator_rmse.evaluate(predictions)
+mae = evaluator_mae.evaluate(predictions)
+
+print(f"Root Mean Square Error (RMSE): {rmse}")
+print(f"Mean Absolute Error (MAE): {mae}")
